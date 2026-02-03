@@ -1,339 +1,357 @@
-const TXT_PROCESSING = 'Processing...'
-const TXT_DONE = 'Finished processing all files.'
-const TXT_NO_ERROR = 'No errors detected. Perhaps there are other errors?<br>Output file is available for download anyway.'
-const TXT_SYS_ERROR = 'The program encountered an internal error.'
+import { EPUBBook } from './js/epub-engine.js';
+import { I18N } from './js/constants.js';
 
-const mainStatusDiv = document.getElementById('main_status')
-const outputDiv = document.getElementById('output')
-const btnDlAll = document.getElementById('btnDlAll')
-const keepOriginalFilename = document.getElementById('keepOriginalFilename')
+let currentLang = localStorage.getItem('kdp_lang') || 'en';
+let epubInstances = [];
+let filenames = [];
+let dlfilenames = [];
+let currentEditIdx = null;
 
-const filePicker = document.getElementById('file')
+const outputDiv = document.getElementById('output');
+const mainStatusDiv = document.getElementById('main_status');
+const fileInput = document.getElementById('file');
+const dropZone = document.getElementById('drop-zone');
+const btnDlAll = document.getElementById('btnDlAll');
 
-let filenames = [], fixedBlobs = [], dlfilenames = []
-
-function build_output_html(idx, status) {
-  const statusDiv = document.createElement('div')
-  const dlBtn = document.createElement('button')
-  statusDiv.style.margin = '1em 0'
-  dlBtn.style.margin = '1em 0'
-  dlBtn.innerHTML = 'Download'
-  dlBtn.addEventListener('click', () => {
-    saveAs(fixedBlobs[idx], dlfilenames[idx])
-  })
-
-  let btn = false
-
-  if (status === TXT_NO_ERROR) {
-    statusDiv.innerHTML = status
-    statusDiv.style.color = 'blue'
-    btn = true
-  } else if (status === TXT_SYS_ERROR) {
-    statusDiv.innerHTML = status
-    statusDiv.style.color = 'red'
-    btn = false
-  } else {
-    statusDiv.innerHTML = `<ul class="scroll">${status.map(x => `<li>${x}</li>`).join('')}</ul>`
-    statusDiv.style.color = 'green'
-    btn = 'block'
-  }
-
-  const section = document.createElement('section')
-  section.style.margin = '2em 0'
-  section.innerHTML = `<h3>${filenames[idx]}</h3>`
-  section.appendChild(statusDiv)
-  if (btn) {
-    section.appendChild(dlBtn)
-  }
-
-  return section
+function t(key, n) {
+  let text = I18N[currentLang][key] || key;
+  if (n !== undefined) text = text.replace('{n}', n);
+  return text;
 }
 
-function setMainStatus(type) {
-  if (type === '') {
-    mainStatusDiv.style.display = 'none'
-    mainStatusDiv.style.display = 'none'
-  } else {
-    mainStatusDiv.style.display = 'block'
-    if (type === TXT_PROCESSING) {
-      mainStatusDiv.innerHTML = type
-      mainStatusDiv.style.color = 'blue'
-    } else if (type === TXT_DONE) {
-      mainStatusDiv.innerHTML = type
-      mainStatusDiv.style.color = 'blue'
-    }
-  }
+function applyI18N() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    el.innerText = t(key);
+  });
 }
 
-function basename(path) {
-  return path.split('/').pop()
+function buildOutputHTML(idx) {
+  const epub = epubInstances[idx];
+  const card = document.createElement('div');
+  card.className = 'result-card';
+
+  // Status icon mapping
+  const statusIcons = {
+    'applied': 'check-circle',
+    'verified': 'circle-check',
+    'warning': 'alert-triangle',
+    'skipped': 'minus-circle'
+  };
+
+  // Tooltip messages
+  const statusTooltips = {
+    'applied': t('tooltip_applied'),
+    'verified': t('tooltip_verified'),
+    'warning': t('tooltip_warning'),
+    'skipped': t('tooltip_skipped')
+  };
+
+  card.innerHTML = `
+    <div class="result-header">
+      <h3>${filenames[idx]}</h3>
+    </div>
+    <div class="cover-container">
+      <div class="cover-preview" onclick="document.getElementById('cover-pick-${idx}').click()">
+        ${epub.coverUrl ? `<img src="${epub.coverUrl}" alt="Cover">` : `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--apple-text-secondary)">${t('no_cover')}</div>`}
+      </div>
+      <div class="cover-info">
+        <div class="meta-info" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem">
+          <span class="meta-badge">${epub.metadata.title || t('unknown')}</span>
+          <span class="meta-badge">${epub.metadata.author || t('unknown')}</span>
+          <span class="meta-badge">${epub.metadata.language || '??'}</span>
+        </div>
+        <ul class="optimization-checklist">
+          ${epub.optimizations.map(opt => `
+            <li class="opt-item ${opt.status}" title="${statusTooltips[opt.status] || ''}">
+              <div class="opt-status">
+                <i data-lucide="${statusIcons[opt.status] || 'circle'}"></i>
+              </div>
+              <span>${t(opt.id, opt.payload)}</span>
+            </li>
+          `).join('')}
+        </ul>
+      </div>
+    </div>
+    <div class="result-actions" style="display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap">
+      <button class="dl-btn btn-secondary" style="flex:1;min-width:120px" onclick="window.openEditor(${idx})" data-i18n="edit_meta">${t('edit_meta')}</button>
+      <button class="dl-btn btn-secondary" style="flex:1;min-width:120px" onclick="window.openReader(${idx})" data-i18n="preview">${t('preview')}</button>
+      <button class="dl-btn" style="flex:1;min-width:120px" onclick="window.downloadEpub(${idx})">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        <span data-i18n="download">${t('download')}</span>
+      </button>
+    </div>
+    <input type="file" id="cover-pick-${idx}" style="display:none" accept="image/jpeg,image/png" onchange="window.handleCoverChange(${idx}, this.files[0])">
+  `;
+
+  // Initialize Lucide icons
+  setTimeout(() => {
+    if (window.lucide) {
+      window.lucide.createIcons();
+    }
+  }, 0);
+
+  return card;
 }
 
-function simplify_language(lang) {
-  return lang.split('-').shift().toLowerCase()
-}
+async function handleFiles(files) {
+  mainStatusDiv.style.display = 'block';
+  mainStatusDiv.innerText = t('processing');
+  mainStatusDiv.setAttribute('data-i18n', 'processing');
+  mainStatusDiv.style.background = 'rgba(0, 122, 255, 0.1)';
+  mainStatusDiv.style.color = 'var(--apple-blue)';
+  outputDiv.innerHTML = '';
+  btnDlAll.style.display = 'none';
 
-class EPUBBook {
-  fixedProblems = []
+  epubInstances = [];
+  filenames = [];
+  dlfilenames = [];
 
-  // Add UTF-8 encoding declaration if missing
-  fixEncoding() {
-    const encoding = '<?xml version="1.0" encoding="utf-8"?>'
-    const regex = /^<\?xml\s+version=["'][\d.]+["']\s+encoding=["'][a-zA-Z\d-.]+["'].*?\?>/i
+  const fileArray = Array.from(files);
+  const startTime = performance.now();
 
-    for (const filename in this.files) {
-      const ext = filename.split('.').pop()
-      if (ext === 'html' || ext === 'xhtml') {
-        let html = this.files[filename]
-        html = html.trimStart()
-        if (!regex.test(html)) {
-          html = encoding + '\n' + html
-          this.fixedProblems.push(`Fixed encoding for file ${filename}`)
-        }
-        this.files[filename] = html
-      }
-    }
-  }
-
-  // Fix linking to body ID showing up as unresolved hyperlink
-  fixBodyIdLink() {
-    const bodyIDList = []
-    const parser = new DOMParser()
-
-    // Create list of ID tag of <body>
-    for (const filename in this.files) {
-      const ext = filename.split('.').pop()
-      if (ext === 'html' || ext === 'xhtml') {
-        let html = this.files[filename]
-        const dom = parser.parseFromString(html, 'text/html')
-        const bodyID = dom.getElementsByTagName('body')[0].id
-        if (bodyID.length > 0) {
-          const linkTarget = basename(filename) + '#' + bodyID
-          bodyIDList.push([linkTarget, basename(filename)])
-        }
-      }
-    }
-
-    // Replace all
-    for (const filename in this.files) {
-      for (const [src, target] of bodyIDList) {
-        if (this.files[filename].includes(src)) {
-          this.files[filename] = this.files[filename].replaceAll(src, target)
-          this.fixedProblems.push(`Replaced link target ${src} with ${target} in file ${filename}.`)
-        }
-      }
-    }
-  }
-
-  // Fix language field not defined or not available
-  fixBookLanguage() {
-    const parser = new DOMParser()
-
-    // From https://kdp.amazon.com/en_US/help/topic/G200673300
-    // Retrieved: 2022-Sep-13
-    const allowed_languages = [
-      // ISO 639-1
-      'af', 'gsw', 'ar', 'eu', 'nb', 'br', 'ca', 'zh', 'kw', 'co', 'da', 'nl', 'stq', 'en', 'fi', 'fr', 'fy', 'gl',
-      'de', 'gu', 'hi', 'is', 'ga', 'it', 'ja', 'lb', 'mr', 'ml', 'gv', 'frr', 'nb', 'nn', 'pl', 'pt', 'oc', 'rm',
-      'sco', 'gd', 'es', 'sv', 'ta', 'cy',
-
-      // ISO 639-2
-      'afr', 'ara', 'eus', 'baq', 'nob', 'bre', 'cat', 'zho', 'chi', 'cor', 'cos', 'dan', 'nld', 'dut', 'eng', 'fin',
-      'fra', 'fre', 'fry', 'glg', 'deu', 'ger', 'guj', 'hin', 'isl', 'ice', 'gle', 'ita', 'jpn', 'ltz', 'mar', 'mal',
-      'glv', 'nor', 'nno', 'por', 'oci', 'roh', 'gla', 'spa', 'swe', 'tam', 'cym', 'wel',
-    ]
-
-    // Find OPF file
-    if (!('META-INF/container.xml' in this.files)) {
-      console.error('Cannot find META-INF/container.xml')
-      return
-    }
-    const meta_inf_str = this.files['META-INF/container.xml']
-    const meta_inf = parser.parseFromString(meta_inf_str, 'text/xml')
-    let opf_filename = ''
-    for (const rootfile of meta_inf.getElementsByTagName('rootfile')) {
-      if (rootfile.getAttribute('media-type') === 'application/oebps-package+xml') {
-        opf_filename = rootfile.getAttribute('full-path')
-      }
-    }
-
-    // Read OPF file
-    if (!(opf_filename in this.files)) {
-      console.error('Cannot find OPF file!')
-      return
-    }
-
-    const opf_str = this.files[opf_filename]
+  const results = await Promise.all(fileArray.map(async file => {
     try {
-      const opf = parser.parseFromString(opf_str, 'text/xml')
-      const language_tags = opf.getElementsByTagName('dc:language')
-      let language = 'en'
-      let original_language = 'undefined'
-      if (language_tags.length === 0) {
-        language = prompt('E-book does not have language tag. Please specify the language of the book in RFC 5646 format, e.g. en, fr, ja.', 'en') || 'en'
-      } else {
-        language = language_tags[0].innerHTML
-        original_language = language
-      }
-      if (!allowed_languages.includes(simplify_language(language))) {
-        language = prompt(`Language ${language} is not supported by Kindle. Documents may fail to convert. Continue or specify new language of the book in RFC 5646 format, e.g. en, fr, ja.`, language) || language
-      }
-      if (language_tags.length === 0) {
-        const language_tag = opf.createElement('dc:language')
-        language_tag.innerHTML = language
-        opf.getElementsByTagName('metadata')[0].appendChild(language_tag)
-      } else {
-        language_tags[0].innerHTML = language
-      }
-      if (language !== original_language) {
-        this.files[opf_filename] = new XMLSerializer().serializeToString(opf)
-        this.fixedProblems.push(`Change document language from ${original_language} to ${language}.`)
-      }
+      const epub = new EPUBBook();
+      await epub.readEPUB(file);
+      epub.parseMetadata();
+      epub.findCover();
+      await epub.runAllOptimizations();
+      return { epub, name: file.name, error: null };
     } catch (e) {
-      console.error(e)
-      console.error('Error trying to parse OPF file as XML.')
+      console.error('Error processing:', file.name, e);
+      return { epub: null, name: file.name, error: e.message };
     }
-  }
+  }));
 
-  fixStrayIMG() {
-    const parser = new DOMParser()
-
-    for (const filename in this.files) {
-      const ext = filename.split('.').pop()
-      if (ext === 'html' || ext === 'xhtml') {
-        let html = parser.parseFromString(this.files[filename], ext === 'xhtml' ? 'application/xhtml+xml' : 'text/html')
-        let strayImg = []
-        for (const img of html.getElementsByTagName('img')) {
-          if (!img.getAttribute('src')) {
-            strayImg.push(img)
-          }
-        }
-        if (strayImg.length > 0) {
-          for (const img of strayImg) {
-            img.parentElement.removeChild(img)
-          }
-          this.fixedProblems.push(`Remove stray image tag(s) in ${filename}`)
-          this.files[filename] = new XMLSerializer().serializeToString(html)
-        }
-      }
-    }
-  }
-
-  async readEPUB(blob) {
-    const reader = new zip.ZipReader(new zip.BlobReader(blob))
-    this.entries = await reader.getEntries()
-    this.files = {}
-    this.binary_files = {}
-    for (const entry of this.entries) {
-      const filename = entry.filename
-      const ext = filename.split('.').pop()
-      if (filename === 'mimetype' || ['html', 'xhtml', 'htm', 'xml', 'svg', 'css', 'opf', 'ncx'].includes(ext)) {
-        this.files[filename] = await entry.getData(new zip.TextWriter('utf-8'))
-      } else {
-        this.binary_files[filename] = await entry.getData(new zip.Uint8ArrayWriter())
-      }
-    }
-  }
-
-  async writeEPUB() {
-    const blobWriter = new zip.BlobWriter('application/epub+zip')
-
-    // EPUB Zip cannot have extra attributes, so no extended timestamp
-    const writer = new zip.ZipWriter(blobWriter, { extendedTimestamp: false })
-
-    // First write mimetype file
-    if ('mimetype' in this.files) {
-      await writer.add('mimetype', new zip.TextReader(this.files['mimetype']), { level: 0 })
-    }
-
-    // Add text file
-    for (const file in this.files) {
-      if (file === 'mimetype') {
-        // We have already added mimetype file
-        continue
-      }
-      await writer.add(file, new zip.TextReader(this.files[file]))
-    }
-
-    // Add binary file
-    for (const file in this.binary_files) {
-      await writer.add(file, new zip.Uint8ArrayReader(this.binary_files[file]))
-    }
-
-    // Finalize file
-    await writer.close()
-    return blobWriter.getData()
-  }
-}
-
-filePicker.addEventListener('change', async (e) => {
-  const selectedFile = e.target.files[0]
-  setMainStatus(TXT_PROCESSING)
-  outputDiv.innerHTML = ''
-  btnDlAll.style.display = 'none'
-
-  for (const file of e.target.files) {
-    await processEPUB(file, file.name)
-  }
-  setMainStatus(TXT_DONE)
-
-  if (e.target.files.length > 1) {
-    btnDlAll.style.display = 'block'
-  }
-})
-
-async function processEPUB (inputBlob, name) {
-  try {
-    // Load EPUB
-    const epub = new EPUBBook()
-    await epub.readEPUB(inputBlob)
-
-    // Run fixing procedure
-    epub.fixBodyIdLink()
-    epub.fixBookLanguage()
-    epub.fixStrayIMG()
-    epub.fixEncoding()
-
-    // Write EPUB
-    const blob = await epub.writeEPUB()
-    const idx = filenames.length
-    filenames.push(name)
-    fixedBlobs.push(blob)
-
-    if (epub.fixedProblems.length > 0) {
-      keepOriginalFilename.checked ? dlfilenames.push(name) : dlfilenames.push("(fixed) " + name)
-      outputDiv.appendChild(build_output_html(idx, epub.fixedProblems))
+  results.forEach(res => {
+    if (res.epub) {
+      epubInstances.push(res.epub);
+      filenames.push(res.name);
+      dlfilenames.push(res.name);
+      outputDiv.appendChild(buildOutputHTML(epubInstances.length - 1));
     } else {
-      keepOriginalFilename.checked ? dlfilenames.push(name) : dlfilenames.push("(repacked) " + name)
-      outputDiv.appendChild(build_output_html(idx, TXT_NO_ERROR))
+      // Show error card for failed files
+      const errorCard = document.createElement('div');
+      errorCard.className = 'result-card';
+      errorCard.style.borderColor = '#FF3B30';
+      errorCard.innerHTML = `
+        <div class="result-header">
+          <h3 style="color: #FF3B30;">❌ ${res.name}</h3>
+        </div>
+        <p style="color: var(--text-secondary); margin: 1rem 0;">
+          ${t('err_processing')}: ${res.error || t('err_unknown')}
+        </p>
+      `;
+      outputDiv.appendChild(errorCard);
     }
-  } catch (e) {
-    console.error(e)
-    const idx = filenames.length
-    filenames.push(name)
-    while (fixedBlobs.length !== filenames.length) {
-      fixedBlobs.push(null)
-    }
-    while (dlfilenames.length !== filenames.length) {
-      dlfilenames.push(null)
-    }
-    outputDiv.appendChild(build_output_html(idx, TXT_SYS_ERROR))
+  });
+
+  mainStatusDiv.innerText = t('done');
+  mainStatusDiv.setAttribute('data-i18n', 'done');
+  mainStatusDiv.style.background = 'rgba(52, 199, 89, 0.1)';
+  mainStatusDiv.style.color = '#34C759';
+
+  if (files.length > 1) {
+    btnDlAll.style.display = 'flex';
+    document.getElementById('bulk-edit-container').style.display = 'block';
+  } else {
+    document.getElementById('bulk-edit-container').style.display = 'none';
   }
+
+  console.log(`✅ Processed ${files.length} files in ${(performance.now() - startTime).toFixed(2)}ms`);
 }
 
-async function downloadAll() {
-  const old = mainStatusDiv.innerHTML
-  mainStatusDiv.innerHTML = 'Preparing download...'
-  const blobWriter = new zip.BlobWriter('application/zip')
-  const writer = new zip.ZipWriter(blobWriter, { extendedTimestamp: false })
-  for (let i = 0; i < fixedBlobs.length; i++) {
-    if (fixedBlobs[i])
-      await writer.add(dlfilenames[i], new zip.BlobReader(fixedBlobs[i]))
-  }
-  await writer.close()
-  const blob = blobWriter.getData()
-  saveAs(blob, 'fixed-epubs.zip')
-  mainStatusDiv.innerHTML = old
-}
+// Global exports for inline onclick handlers
+window.downloadEpub = async (idx) => {
+  const blob = await epubInstances[idx].writeEPUB();
+  saveAs(blob, dlfilenames[idx]);
+};
 
-btnDlAll.addEventListener('click', downloadAll)
+window.openEditor = (idx) => {
+  currentEditIdx = idx;
+  const meta = epubInstances[idx].metadata;
+  document.getElementById('edit-title').value = meta.title || '';
+  document.getElementById('edit-author').value = meta.author || '';
+  document.getElementById('edit-series').value = meta.series || '';
+  document.getElementById('edit-language').value = meta.language || '';
+  document.getElementById('modal-metadata').classList.add('active');
+};
+
+window.closeMetadataModal = () => {
+  document.getElementById('modal-metadata').classList.remove('active');
+  currentEditIdx = null;
+};
+
+window.saveMetadataChanges = () => {
+  if (currentEditIdx === null) return;
+  const epub = epubInstances[currentEditIdx];
+  epub.updateMetadata({
+    title: document.getElementById('edit-title').value,
+    author: document.getElementById('edit-author').value,
+    series: document.getElementById('edit-series').value,
+    language: document.getElementById('edit-language').value
+  });
+
+  const oldCard = outputDiv.children[currentEditIdx];
+  const newCard = buildOutputHTML(currentEditIdx);
+  outputDiv.replaceChild(newCard, oldCard);
+
+  window.closeMetadataModal();
+};
+
+window.openReader = (idx) => {
+  const epub = epubInstances[idx];
+  let firstFile = '';
+  for (const file in epub.files) {
+    if ((file.endsWith('.html') || file.endsWith('.xhtml')) &&
+      !file.includes('nav.xhtml') && !file.includes('toc.xhtml')) {
+      firstFile = file;
+      break;
+    }
+  }
+
+  if (firstFile) {
+    document.getElementById('reader-frame').srcdoc = epub.files[firstFile];
+  }
+  document.getElementById('modal-reader').classList.add('active');
+};
+
+window.closeReaderModal = () => {
+  document.getElementById('modal-reader').classList.remove('active');
+  document.getElementById('reader-frame').srcdoc = '';
+};
+
+window.handleCoverChange = async (idx, file) => {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const uint8 = new Uint8Array(e.target.result);
+    await epubInstances[idx].updateCover(uint8, file.type);
+
+    const oldCard = outputDiv.children[idx];
+    const newCard = buildOutputHTML(idx);
+    outputDiv.replaceChild(newCard, oldCard);
+  };
+  reader.readAsArrayBuffer(file);
+};
+
+window.toggleLanguage = () => {
+  currentLang = currentLang === 'en' ? 'pt' : 'en';
+  localStorage.setItem('kdp_lang', currentLang);
+  applyI18N();
+};
+
+window.toggleTheme = () => {
+  document.body.classList.toggle('light-mode');
+  localStorage.setItem('kdp_theme', document.body.classList.contains('light-mode') ? 'light' : 'dark');
+};
+
+window.toggleNamingInput = () => {
+  const keep = document.getElementById('keepOriginalFilename')?.checked;
+  const pattern = document.getElementById('naming-pattern-container');
+  const input = document.getElementById('namingPattern');
+  if (pattern) pattern.style.opacity = keep ? '0.3' : '1';
+  if (input) input.disabled = keep;
+};
+
+window.applyBulkMetadata = () => {
+  const author = document.getElementById('bulk-author')?.value.trim();
+  const series = document.getElementById('bulk-series')?.value.trim();
+
+  if (!author && !series) return;
+
+  epubInstances.forEach((epub, idx) => {
+    const updates = {};
+    if (author) updates.author = author;
+    if (series) updates.series = series;
+    epub.updateMetadata(updates);
+
+    const oldCard = outputDiv.children[idx];
+    const newCard = buildOutputHTML(idx);
+    outputDiv.replaceChild(newCard, oldCard);
+  });
+
+  mainStatusDiv.innerHTML = t('bulk_meta_applied', epubInstances.length);
+  mainStatusDiv.style.display = 'block';
+};
+
+// Event listeners
+fileInput.addEventListener('change', e => {
+  if (e.target.files.length) handleFiles(e.target.files);
+});
+
+dropZone.addEventListener('dragover', e => {
+  e.preventDefault();
+  dropZone.classList.add('drag-over');
+});
+
+['dragleave', 'dragend'].forEach(type => {
+  dropZone.addEventListener(type, () => dropZone.classList.remove('drag-over'));
+});
+
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const epubFiles = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.epub'));
+  if (epubFiles.length) handleFiles(epubFiles);
+});
+
+btnDlAll?.addEventListener('click', async () => {
+  const oldText = btnDlAll.innerHTML;
+  btnDlAll.innerHTML = t('preparing_zip');
+
+  const blobWriter = new zip.BlobWriter('application/zip');
+  const writer = new zip.ZipWriter(blobWriter, { extendedTimestamp: false });
+
+  for (let i = 0; i < epubInstances.length; i++) {
+    const blob = await epubInstances[i].writeEPUB();
+    await writer.add(dlfilenames[i], new zip.BlobReader(blob));
+  }
+
+  await writer.close();
+  saveAs(await blobWriter.getData(), 'fixed-epubs.zip');
+  btnDlAll.innerHTML = oldText;
+});
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+  // Apply saved theme
+  if (localStorage.getItem('kdp_theme') === 'light') {
+    document.body.classList.add('light-mode');
+  }
+
+  // Apply translations
+  applyI18N();
+
+  // Bind toggle buttons
+  const langToggle = document.getElementById('lang-toggle');
+  const themeToggle = document.getElementById('theme-toggle');
+
+  if (langToggle) {
+    langToggle.addEventListener('click', () => {
+      if (currentLang === 'en') currentLang = 'pt';
+      else if (currentLang === 'pt') currentLang = 'es';
+      else currentLang = 'en';
+
+      localStorage.setItem('kdp_lang', currentLang);
+      applyI18N();
+    });
+  }
+
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      document.body.classList.toggle('light-mode');
+      localStorage.setItem('kdp_theme', document.body.classList.contains('light-mode') ? 'light' : 'dark');
+    });
+  }
+
+  // Initialize Lucide icons
+  if (window.lucide) {
+    window.lucide.createIcons();
+  }
+});

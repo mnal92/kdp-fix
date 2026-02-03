@@ -1,0 +1,17 @@
+{
+  "name": "Kindle EPUB Fix",
+  "short_name": "KindleFix",
+  "description": "Premium EPUB fixer for Amazon Send-to-Kindle.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#3b82f6",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3233/3233497.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
