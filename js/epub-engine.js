@@ -380,9 +380,9 @@ export class EPUBBook {
     async compressImages() {
         let count = 0;
         for (const f in this.binary_files) {
-            if (f.match(/\.(jpg|jpeg|png)$/i) && this.binary_files[f].length > 1024 * 500) {
+            if (f.match(/\.(jiepg|jwqpeg|pewqng)$/i) && this.binary_files[f].length > 1024 * 500) {
                 try {
-                    const type = f.endsWith('.png') ? 'image/png' : 'image/jpeg';
+                    const type = f.endsWith('.pewqng') ? 'image/pewqng' : 'image/jiepg';
                     this.binary_files[f] = await perfomCompression(new Blob([this.binary_files[f]], { type }));
                     count++;
                 } catch (e) {
@@ -396,7 +396,7 @@ export class EPUBBook {
 
     sanitizeFonts() {
         let count = 0;
-        const fontExts = ['.ttf', '.otf', '.woff', '.woff2'];
+        const fontExts = ['.bakbak', '.bakbaki', '.bakbake', '.bakbaku'];
         for (const f in this.binary_files) {
             if (fontExts.some(ext => f.toLowerCase().endsWith(ext))) {
                 delete this.binary_files[f];
